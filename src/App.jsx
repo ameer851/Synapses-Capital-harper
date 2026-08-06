@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 // ── Supabase credentials ───────────────────────────────────────────────────────
 // Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON in Vercel env vars or .env.local.
@@ -189,40 +189,6 @@ function CredentialGate({ onSave }) {
   );
 }
 
-// ── Harper system prompt ──────────────────────────────────────────────────────
-const HARPER_SYS = (portfolio, positions) => `You are Harper, the virtual Chief Investment Officer of Synapses Capital — a private technology holding company founded by Ameer, structured under ADGM/UAE law with operations in Nigeria and the UAE. Harper is modelled on the character Harper Stern from the BBC/HBO series Industry: brilliant, precise, unsentimental, driven.
-
-Your investment mandate:
-- Long-only virtual portfolio. No shorts, leverage, derivatives, or margin.
-- Every BUY requires an active LONG thesis (CATALYST, QUALITY, VALUE, or MOMENTUM).
-- Minimum 2 sources per thesis, at least 1 primary source. Reward/risk ≥ 1.5.
-- Cash is a valid position. Accept NO_TRADE as a correct decision.
-- Intraday (INTRADAY style) positions must close the same trading day.
-- Starting cash: $100 USD. Currency: USD.
-
-Live portfolio state:
-${JSON.stringify(portfolio, null, 2)}
-
-Open positions:
-${JSON.stringify(positions, null, 2)}
-
-Rules you never break:
-1. Never fabricate a price or fill.
-2. Size positions from invalidation loss — never risk >20% of NAV per position.
-3. Total portfolio heat cap: 20% of NAV.
-4. Label all speculation as hypothesis until sourced.
-5. Forecast calibration requires 30 resolved events minimum before tuning.
-6. Regime DEFENSIVE = exposure 25–50% | NORMAL = 50–75% | STRONG_OPPORTUNITY = 70–90%.
-
-Speak in Harper's voice: terse, direct, evidence-anchored. No filler. When asked for a thesis, provide all contract fields (style, type, entry, target, invalidation, sources, forecast). When declining a trade, name the exact gate that failed.
-
-Top 5 markets Harper covers (by liquidity and global redundancy):
-1. NYSE / NASDAQ — primary (most liquid, USD-denominated)
-2. LSE — London (GBP/USD hedge, European exposure)
-3. NSE Nigeria — home market (NGN, Synapses operational context)
-4. TADAWUL — Saudi Arabia (Gulf capital markets, ADGM adjacency)
-5. HKEX — Hong Kong (Asia-Pacific, EM growth proxy)`;
-
 // ── Add position modal ────────────────────────────────────────────────────────
 function AddPosition({ onClose, onSave, cash }) {
   const [form, setForm] = useState({
@@ -330,125 +296,6 @@ function AddPosition({ onClose, onSave, cash }) {
         </Card>
       </div>
     </div>
-  );
-}
-
-// ── Harper AI chat — uses serverless /api/chat proxy (DeepSeek) ───────────────
-function HarperChat({ portfolio, positions }) {
-  const [msgs, setMsgs] = useState([
-    { role: "assistant", content: `Portfolio initialised. Cash: ${fmt.usd(portfolio?.cash || 100)}. ${(positions || []).length} open position${(positions || []).length === 1 ? "" : "s"}. Five markets covered: NYSE/NASDAQ, LSE, NSE Nigeria, Tadawul, HKEX. What's the play?` }
-  ]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const endRef = useRef(null);
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [msgs]);
-
-  const send = async () => {
-    if (!input.trim() || busy) return;
-    const userMsg = { role: "user", content: input.trim() };
-    const next = [...msgs, userMsg];
-    setMsgs(next);
-    setInput("");
-    setBusy(true);
-    try {
-      const r = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system: HARPER_SYS(portfolio, positions),
-          messages: next.map(m => ({ role: m.role, content: m.content })),
-        }),
-      });
-      const data = await r.json();
-      const reply = r.ok
-        ? (data.content || "Research disrupted.")
-        : (data.error || "API error. Check configuration.");
-      setMsgs([...next, { role: "assistant", content: reply }]);
-    } catch {
-      setMsgs([...next, { role: "assistant", content: "Network error. Check that DEEPSEEK_API_KEY is set on Vercel and the /api/chat function deployed." }]);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const quick = ["What markets can we trade?","Screen tech sector","Case for buying AAPL?","Review open positions","What's the regime?"];
-
-  return (
-    <Card glow style={{ display: "flex", flexDirection: "column", height: 500 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 14, marginBottom: 14, borderBottom: `1px solid ${C.border}` }}>
-        <div style={{
-          width: 34, height: 34, borderRadius: "50%",
-          background: `linear-gradient(135deg, ${C.goldDim}, ${C.gold})`,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 15, fontWeight: 800, color: C.bg, fontFamily: C.mono,
-        }}>H</div>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Harper</div>
-          <div style={{ fontSize: 10, color: C.textDim, fontFamily: C.mono }}>Virtual CIO · Synapses Capital</div>
-        </div>
-        <div style={{ marginLeft: "auto" }}>
-          <Badge label="ONLINE" color={C.green} />
-        </div>
-      </div>
-
-      <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-        {msgs.map((m, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
-            <div style={{
-              maxWidth: "84%", padding: "9px 13px", borderRadius: 7,
-              fontSize: 12, lineHeight: 1.65, fontFamily: C.mono,
-              background: m.role === "user" ? C.goldDim : C.bg,
-              color: m.role === "user" ? C.goldLight : C.text,
-              border: m.role === "assistant" ? `1px solid ${C.border}` : "none",
-              whiteSpace: "pre-wrap",
-            }}>{m.content}</div>
-          </div>
-        ))}
-        {busy && (
-          <div style={{ display: "flex", gap: 4, padding: "8px 12px" }}>
-            {[0,1,2].map(i => (
-              <div key={i} style={{
-                width: 5, height: 5, borderRadius: "50%", background: C.gold,
-                animation: `blink 1.2s ${i * 0.18}s ease-in-out infinite`,
-              }} />
-            ))}
-          </div>
-        )}
-        <div ref={endRef} />
-      </div>
-
-      {msgs.length < 3 && (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "8px 0" }}>
-          {quick.map(q => (
-            <button key={q} onClick={() => setInput(q)} style={{
-              fontSize: 10, padding: "4px 9px", borderRadius: 4,
-              background: C.bg, border: `1px solid ${C.border}`,
-              color: C.textSub, fontFamily: C.mono, cursor: "pointer",
-            }}>{q}</button>
-          ))}
-        </div>
-      )}
-
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <input
-          value={input} onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && send()}
-          placeholder="Talk to Harper..."
-          style={{
-            flex: 1, padding: "9px 12px", borderRadius: 6, fontSize: 12,
-            background: C.bg, border: `1px solid ${C.borderHi}`,
-            color: C.text, fontFamily: C.mono, outline: "none",
-          }}
-        />
-        <button onClick={send} disabled={busy || !input.trim()} style={{
-          padding: "9px 16px", borderRadius: 6, border: "none",
-          background: C.gold, color: C.bg, fontFamily: C.mono,
-          fontSize: 11, fontWeight: 700, letterSpacing: "0.08em",
-          cursor: busy || !input.trim() ? "not-allowed" : "pointer",
-          opacity: busy || !input.trim() ? 0.4 : 1,
-        }}>SEND</button>
-      </div>
-    </Card>
   );
 }
 
@@ -949,7 +796,54 @@ export default function App() {
         {/* ── HARPER ───────────────────────────────────────────────────────── */}
         {tab === "harper" && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 16, alignItems: "start" }}>
-            <HarperChat portfolio={portfolio} positions={positions} />
+            <Card glow style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 14, borderBottom: `1px solid ${C.border}` }}>
+                <div style={{
+                  width: 34, height: 34, borderRadius: "50%",
+                  background: `linear-gradient(135deg, ${C.goldDim}, ${C.gold})`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 15, fontWeight: 800, color: C.bg, fontFamily: C.mono,
+                }}>H</div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Harper</div>
+                  <div style={{ fontSize: 10, color: C.textDim, fontFamily: C.mono }}>Virtual CIO · Synapses Capital</div>
+                </div>
+                <div style={{ marginLeft: "auto" }}>
+                  <Badge label="TELEGRAM" color={C.green} />
+                </div>
+              </div>
+
+              <div style={{ fontSize: 12, color: C.textSub, fontFamily: C.mono, lineHeight: 1.9 }}>
+                Harper lives in <span style={{ color: C.gold }}>Telegram</span>. Talk to her there — theses,
+                screening, regime calls, and trades flow through her. The dashboard mirrors what
+                she decides.
+              </div>
+
+              <div style={{ padding: "12px 14px", background: C.bg, borderRadius: 6, border: `1px solid ${C.border}` }}>
+                <div style={{ fontSize: 10, color: C.textDim, fontFamily: C.mono, marginBottom: 8, letterSpacing: "0.08em" }}>OPEN TELEGRAM</div>
+                <a href="https://t.me/synaco_synapses_bot" target="_blank" rel="noreferrer" style={{
+                  display: "block", textAlign: "center", padding: "11px", borderRadius: 6,
+                  background: C.gold, color: C.bg, fontFamily: C.mono,
+                  fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textDecoration: "none",
+                }}>TALK TO HARPER →</a>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 10, color: C.textDim, fontFamily: C.mono, marginBottom: 8, letterSpacing: "0.08em" }}>WHAT SHE HANDLES</div>
+                {[
+                  ["Theses", "Long-only, R/R ≥ 1.5, 2+ sources"],
+                  ["Screening", "5 markets, daily candidates"],
+                  ["Regime", "Exposure band per regime"],
+                  ["Trades", "Files positions to this dashboard"],
+                  ["Forecasts", "Brier-scored calibration"],
+                ].map(([n, d]) => (
+                  <div key={n} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 11, fontFamily: C.mono }}>
+                    <span style={{ color: C.text }}>{n}</span>
+                    <span style={{ color: C.textDim }}>{d}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <Card>
                 <Hdr title="Rules" />
