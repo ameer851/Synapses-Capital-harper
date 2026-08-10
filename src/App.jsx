@@ -1,10 +1,31 @@
 import { useState, useEffect, useCallback } from "react";
+import BridgeStatusBar from "./components/BridgeStatusBar";
+import SignalCard from "./components/SignalCard";
+import ScreenProgress from "./components/ScreenProgress";
+import BacktestCard from "./components/BacktestCard";
+import ShadowReportCard from "./components/ShadowReportCard";
+import BriefPanel from "./components/BriefPanel";
+import { bridge, screen, backtest, bridgeConfigured } from "./lib/bridge";
 
 // ── Supabase credentials ───────────────────────────────────────────────────────
 // Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON in Vercel env vars or .env.local.
 // If left blank, the credential gate appears at startup.
 const SUPABASE_URL  = import.meta.env.VITE_SUPABASE_URL  || "";
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON || "";
+
+// ── Harper system prompt — PRD §6.3 action-block routing ───────────────────────
+const HARPER_SYS = `You are Harper, Virtual CIO of Synapses Capital (long-only, ADGM, paper trading).
+You enforce the investment mandate: R/R >= 1.5, >=2 sources (>=1 primary), no leverage, no shorts,
+max 20% NAV per position, intraday closes same day. You keep a Brier-scored forecast record.
+Be sharp, decisive, and evidence-driven.
+
+ROUTING — when the user asks you to DO something, append a single <action> JSON block to your prose:
+- screen a sector/list of tickers: <action>{"type":"SCREEN","sector":"...","universe":["..."]}</action>
+- build a thesis/signal on a ticker: <action>{"type":"SIGNAL","ticker":"...","style":"POSITION","thesis_type":"MOMENTUM"}</action>
+- backtest a position: <action>{"type":"BACKTEST","ticker":"...","position_id":...}</action>
+- shadow account report: <action>{"type":"SHADOW","lookback_days":90}</action>
+- resolve a forecast: <action>{"type":"RESOLVE_FORECAST","forecast_id":...,"event":"..."}</action>
+Never fabricate fills. If you cannot act, say so plainly.`;
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const C = {
@@ -41,6 +62,21 @@ const fmt = {
 };
 
 const clr = (n) => (Number(n) >= 0 ? C.green : C.red);
+
+// ── Parse <action> blocks from Harper chat responses ──────────────────────────
+function parseActions(text) {
+  const actions = [];
+  const re = /<action>([\s\S]*?)<\/action>/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    try { actions.push(JSON.parse(m[1].trim())); } catch { /* skip malformed */ }
+  }
+  return actions;
+}
+
+function stripActions(text) {
+  return text.replace(/<action>[\s\S]*?<\/action>/g, "").trim();
+}
 
 // ── Tiny components ───────────────────────────────────────────────────────────
 function Badge({ label, color = C.gold }) {
@@ -190,11 +226,16 @@ function CredentialGate({ onSave }) {
 }
 
 // ── Add position modal ────────────────────────────────────────────────────────
-function AddPosition({ onClose, onSave, cash }) {
-  const [form, setForm] = useState({
-    ticker: "", name: "", sector: "", style: "POSITION", thesis_type: "MOMENTUM",
-    shares: "", entry_price: "", target_price: "", invalidation: "",
-    thesis: "", confidence: "0.70",
+function AddPosition({ onClose, onSave, cash, initial }) {
+  const [form, setForm] = useState(() => {
+    const b = initial || {};
+    return {
+      ticker: b.ticker || "", name: b.name || "", sector: b.sector || "",
+      style: b.style || "POSITION", thesis_type: b.thesis_type || "MOMENTUM",
+      shares: b.shares || "", entry_price: b.entry_ref || b.entry_price || "",
+      target_price: b.target || b.target_price || "", invalidation: b.invalidation || "",
+      thesis: b.thesis || "", confidence: b.confidence != null ? String(b.confidence) : "0.70",
+    };
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const cost = (Number(form.shares) * Number(form.entry_price)) || 0;
@@ -315,6 +356,16 @@ export default function App() {
   const [err, setErr] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [selPos, setSelPos] = useState(null);
+  const [addInitial, setAddInitial] = useState(null);
+
+  // ── Bridge / Harper chat state ──────────────────────────────────────────────
+  const [chat, setChat] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [signals, setSignals] = useState({});
+  const [screens, setScreens] = useState([]);
+  const [backtests, setBacktests] = useState({});
+  const [shadowReport, setShadowReport] = useState(null);
 
   const sbq = useCallback(async (table, opts = {}) => {
     if (!creds) return [];
@@ -441,6 +492,7 @@ export default function App() {
       const newNav = newCash + positions.reduce((s, p) => s + Number(p.shares) * Number(p.current_price || p.entry_price), 0) + cost;
       await sbInsert("nav_snapshots", { nav: newNav, cash: newCash, exposure: ((newNav - newCash) / newNav) * 100 });
       setShowAdd(false);
+      setAddInitial(null);
       load();
     } catch (e) { setErr(e.message); }
   };
@@ -470,6 +522,98 @@ export default function App() {
       await sbPatch("positions", `id=eq.${pos.id}`, { current_price: Number(newPrice) });
       load();
     } catch (e) { setErr(e.message); }
+  };
+
+  // ── Bridge action dispatch — PRD §6.3 ───────────────────────────────────────
+  const pushChat = useCallback((who, text) => {
+    setChat(c => [...c, { who, text, ts: Date.now() }]);
+  }, []);
+
+  const dispatchAction = useCallback((action) => {
+    if (!bridgeConfigured()) {
+      pushChat("Harper", "Bridge not configured — set VITE_BRIDGE_URL / VITE_BRIDGE_KEY.");
+      return;
+    }
+    switch (action.type) {
+      case "SIGNAL": {
+        pushChat("Harper", `Building thesis for ${action.ticker}…`);
+        bridge.signal({
+          ticker: action.ticker, style: action.style || "POSITION",
+          thesis_type: action.thesis_type || "MOMENTUM",
+        })
+          .then(sig => { setSignals(s => ({ ...s, [sig.ticker]: sig })); pushChat("Harper", `Signal for ${sig.ticker}: ${sig.signal} · gate ${sig.gate_status}`); })
+          .catch(e => pushChat("Harper", `Signal failed: ${e.detail?.gate_failed || e.message}`));
+        break;
+      }
+      case "SCREEN": {
+        setScreens(s => [...s, { id: Date.now(), ...action }]);
+        pushChat("Harper", `Screening ${action.sector || (action.universe || []).join(", ")}…`);
+        break;
+      }
+      case "BACKTEST": {
+        pushChat("Harper", `Backtesting ${action.ticker}…`);
+        backtest({
+          ticker: action.ticker, position_id: action.position_id || null,
+          period_start: action.period_start || "2025-01-01", period_end: action.period_end || "2026-08-01",
+        }, {
+          onComplete: res => { setBacktests(b => ({ ...b, [action.ticker]: res })); pushChat("Harper", `Backtest ${action.ticker}: Sharpe ${res.sharpe}`); },
+          onError: m => pushChat("Harper", `Backtest failed: ${m}`),
+        });
+        break;
+      }
+      case "SHADOW": {
+        pushChat("Harper", "Running Shadow Account analysis…");
+        bridge.shadow({ lookback_days: action.lookback_days || 90, deliver_telegram: true })
+          .then(rep => { setShadowReport(rep); pushChat("Harper", `Shadow report: ${rep.summary.trades_analysed} trades analysed.`); })
+          .catch(e => pushChat("Harper", `Shadow failed: ${e.message}`));
+        break;
+      }
+      case "RESOLVE_FORECAST": {
+        pushChat("Harper", `Resolving forecast ${action.forecast_id}…`);
+        bridge.resolveForecast({ forecast_id: action.forecast_id, event: action.event, resolution_date: action.resolution_date || new Date().toISOString().split("T")[0] })
+          .then(r => { pushChat("Harper", `Forecast ${r.forecast_id}: ${r.outcome} (brier ${r.brier_contribution})`); load(); })
+          .catch(e => pushChat("Harper", `Resolve failed: ${e.message}`));
+        break;
+      }
+      default:
+        pushChat("Harper", `Unknown action: ${action.type}`);
+    }
+  }, [pushChat, bridgeConfigured]);
+
+  const sendChat = async () => {
+    const text = chatInput.trim();
+    if (!text || chatBusy) return;
+    setChatInput("");
+    pushChat("You", text);
+    setChatBusy(true);
+    try {
+      const r = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          system: HARPER_SYS,
+          messages: chat.concat({ role: "user", content: text }).map(m => ({ role: m.who === "You" ? "user" : "assistant", content: m.text })),
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || r.statusText);
+      const actions = parseActions(data.content);
+      const prose = stripActions(data.content);
+      if (prose) pushChat("Harper", prose);
+      actions.forEach(dispatchAction);
+    } catch (e) {
+      pushChat("Harper", `Chat error: ${e.message}`);
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const handleFileFromSignal = (sig) => {
+    setAddInitial({
+      ticker: sig.ticker, entry_ref: sig.entry_ref, target: sig.target,
+      invalidation: sig.invalidation, thesis: sig.thesis, confidence: sig.confidence,
+    });
+    setShowAdd(true);
   };
 
   if (!creds) return <CredentialGate onSave={(url, key) => setCreds({ url, key })} />;
@@ -516,6 +660,7 @@ export default function App() {
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 12, alignItems: "center" }}>
           {portfolio && <Badge label={portfolio.regime} color={C.green} />}
+          <BridgeStatusBar />
           <button onClick={load} style={{
             background: "none", border: `1px solid ${C.border}`, borderRadius: 5,
             padding: "4px 10px", fontSize: 10, color: C.textDim, fontFamily: C.mono,
@@ -610,6 +755,8 @@ export default function App() {
                 ))}
               </div>
             </Card>
+
+            <BriefPanel />
 
             <Card>
               <Hdr title="Decision Log" right={`${decisions.length} total`} />
@@ -737,6 +884,14 @@ export default function App() {
             <div style={{ padding: "12px 16px", background: C.surface, borderRadius: 7, border: `1px solid ${C.border}`, fontSize: 11, color: C.textDim, fontFamily: C.mono, lineHeight: 1.9 }}>
               <span style={{ color: C.gold }}>Risk gates: </span>Max 20% NAV per position · Long-only · No leverage · No shorts · Intraday must close same day · R/R ≥ 1.5 required
             </div>
+
+            {Object.keys(backtests).length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {Object.entries(backtests).map(([ticker, result]) => (
+                  <BacktestCard key={ticker} result={result} />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -790,6 +945,18 @@ export default function App() {
                 </div>
               )}
             </Card>
+
+            {screens.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {screens.map(s => (
+                  <ScreenProgress key={s.id} payload={s} onComplete={load} />
+                ))}
+              </div>
+            )}
+
+            {shadowReport && (
+              <ShadowReportCard report={shadowReport} />
+            )}
           </div>
         )}
 
@@ -809,39 +976,59 @@ export default function App() {
                   <div style={{ fontSize: 10, color: C.textDim, fontFamily: C.mono }}>Virtual CIO · Synapses Capital</div>
                 </div>
                 <div style={{ marginLeft: "auto" }}>
-                  <Badge label="TELEGRAM" color={C.green} />
+                  <Badge label={bridgeConfigured() ? "BRIDGE" : "CHAT ONLY"} color={bridgeConfigured() ? C.green : C.textDim} />
                 </div>
               </div>
 
-              <div style={{ fontSize: 12, color: C.textSub, fontFamily: C.mono, lineHeight: 1.9 }}>
-                Harper lives in <span style={{ color: C.gold }}>Telegram</span>. Talk to her there — theses,
-                screening, regime calls, and trades flow through her. The dashboard mirrors what
-                she decides.
-              </div>
-
-              <div style={{ padding: "12px 14px", background: C.bg, borderRadius: 6, border: `1px solid ${C.border}` }}>
-                <div style={{ fontSize: 10, color: C.textDim, fontFamily: C.mono, marginBottom: 8, letterSpacing: "0.08em" }}>OPEN TELEGRAM</div>
-                <a href="https://t.me/synaco_synapses_bot" target="_blank" rel="noreferrer" style={{
-                  display: "block", textAlign: "center", padding: "11px", borderRadius: 6,
-                  background: C.gold, color: C.bg, fontFamily: C.mono,
-                  fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textDecoration: "none",
-                }}>TALK TO HARPER →</a>
-              </div>
-
-              <div>
-                <div style={{ fontSize: 10, color: C.textDim, fontFamily: C.mono, marginBottom: 8, letterSpacing: "0.08em" }}>WHAT SHE HANDLES</div>
-                {[
-                  ["Theses", "Long-only, R/R ≥ 1.5, 2+ sources"],
-                  ["Screening", "5 markets, daily candidates"],
-                  ["Regime", "Exposure band per regime"],
-                  ["Trades", "Files positions to this dashboard"],
-                  ["Forecasts", "Brier-scored calibration"],
-                ].map(([n, d]) => (
-                  <div key={n} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 11, fontFamily: C.mono }}>
-                    <span style={{ color: C.text }}>{n}</span>
-                    <span style={{ color: C.textDim }}>{d}</span>
+              {/* chat thread */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: 320, maxHeight: 420, overflowY: "auto" }}>
+                {chat.length === 0 && (
+                  <div style={{ fontSize: 12, color: C.textDim, fontFamily: C.mono, textAlign: "center", padding: "40px 0", lineHeight: 2 }}>
+                    Talk to Harper — build a thesis, screen a sector,<br />
+                    backtest a position, run the shadow account.<br />
+                    <span style={{ fontSize: 10 }}>e.g. "Build a thesis for NVDA" · "Screen semiconductors"</span>
+                  </div>
+                )}
+                {chat.map((m, i) => (
+                  <div key={i} style={{
+                    alignSelf: m.who === "You" ? "flex-end" : "flex-start",
+                    maxWidth: "85%", padding: "8px 12px", borderRadius: 8,
+                    background: m.who === "You" ? C.surface3 : C.bg,
+                    border: `1px solid ${m.who === "You" ? C.borderHi : C.border}`,
+                    fontSize: 12, fontFamily: C.mono, lineHeight: 1.7, whiteSpace: "pre-wrap",
+                    color: m.who === "You" ? C.text : C.textSub,
+                  }}>
+                    {m.text}
                   </div>
                 ))}
+                {chatBusy && (
+                  <div style={{ fontSize: 11, color: C.textDim, fontFamily: C.mono }}>…thinking</div>
+                )}
+              </div>
+
+              {/* rendered signal cards */}
+              {Object.values(signals).map(sig => (
+                <SignalCard key={sig.ticker} signal={sig} onFileThesis={() => handleFileFromSignal(sig)} />
+              ))}
+
+              {/* input */}
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && sendChat()}
+                  placeholder="Message Harper…"
+                  style={{
+                    flex: 1, padding: "10px 12px", borderRadius: 6,
+                    background: C.bg, border: `1px solid ${C.borderHi}`,
+                    color: C.text, fontFamily: C.mono, fontSize: 12, outline: "none",
+                  }}
+                />
+                <button onClick={sendChat} disabled={chatBusy} style={{
+                  padding: "10px 16px", borderRadius: 6, border: "none",
+                  background: C.gold, color: C.bg, fontFamily: C.mono, fontSize: 11,
+                  fontWeight: 700, letterSpacing: "0.08em", cursor: chatBusy ? "not-allowed" : "pointer",
+                }}>SEND</button>
               </div>
             </Card>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -884,7 +1071,12 @@ export default function App() {
       </div>
 
       {showAdd && portfolio && (
-        <AddPosition cash={Number(portfolio.cash)} onClose={() => setShowAdd(false)} onSave={handleBuy} />
+        <AddPosition
+          cash={Number(portfolio.cash)}
+          initial={addInitial}
+          onClose={() => { setShowAdd(false); setAddInitial(null); }}
+          onSave={handleBuy}
+        />
       )}
     </div>
   );
