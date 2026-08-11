@@ -13,6 +13,7 @@ import CryptoDominance from "./components/widgets/CryptoDominance";
 import TVChart from "./components/widgets/TVChart";
 import EconomicCalendar from "./components/widgets/EconomicCalendar";
 import SignalScoreboard from "./components/widgets/SignalScoreboard";
+import NewsFeed from "./components/widgets/NewsFeed";
 import { bridge, screen, backtest, bridgeConfigured } from "./lib/bridge";
 
 // ── Supabase credentials ───────────────────────────────────────────────────────
@@ -794,6 +795,8 @@ export default function App() {
                 <CryptoDominance />
               </div>
             </div>
+
+            <NewsFeed />
 
             <Card>
               <Hdr title="Markets Covered" right="5 adapters · redundancy enabled" />
