@@ -562,8 +562,15 @@ export default function App() {
           ticker: action.ticker, style: action.style || "POSITION",
           thesis_type: action.thesis_type || "MOMENTUM",
         })
-          .then(sig => { setSignals(s => ({ ...s, [sig.ticker]: sig })); pushChat("Harper", `Signal for ${sig.ticker}: ${sig.signal} · gate ${sig.gate_status}`); })
-          .catch(e => pushChat("Harper", `Signal failed: ${e.detail?.gate_failed || e.message}`));
+          .then(sig => {
+            setSignals(s => ({ ...s, [sig.ticker]: sig }));
+            if (sig.gate_status === "FAILED") {
+              pushChat("Harper", `${sig.ticker}: ${sig.signal} — gate blocked (${sig.gate_failed}). R/R ${sig.reward_risk} < 1.5. Thesis: ${sig.thesis?.slice(0, 200) || "n/a"}`);
+            } else {
+              pushChat("Harper", `${sig.ticker}: ${sig.signal} · gate CLEAR · R/R ${sig.reward_risk}`);
+            }
+          })
+          .catch(e => pushChat("Harper", `Signal error: ${e.message}`));
         break;
       }
       case "SCREEN": {
