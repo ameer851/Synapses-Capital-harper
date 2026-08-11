@@ -22,12 +22,21 @@ async function req(method, path, body) {
   if (!r.ok) {
     let detail;
     try { detail = await r.json(); } catch { detail = await r.text(); }
-    const err = new Error(typeof detail === "string" ? detail : (detail.detail || r.statusText));
+    const err = new Error(describeError(detail, r.statusText));
     err.status = r.status;
     err.detail = detail;
     throw err;
   }
   return r.json();
+}
+
+function describeError(detail, fallback) {
+  if (typeof detail === "string") return detail || fallback;
+  if (detail == null) return fallback;
+  if (typeof detail.detail === "string") return detail.detail;
+  if (typeof detail.error === "string") return detail.error;
+  if (typeof detail.message === "string") return detail.message;
+  try { return JSON.stringify(detail); } catch { return fallback; }
 }
 
 // ── REST endpoints ───────────────────────────────────────────────────────────
