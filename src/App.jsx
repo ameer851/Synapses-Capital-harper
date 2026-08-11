@@ -5,6 +5,14 @@ import ScreenProgress from "./components/ScreenProgress";
 import BacktestCard from "./components/BacktestCard";
 import ShadowReportCard from "./components/ShadowReportCard";
 import BriefPanel from "./components/BriefPanel";
+import LiveTicker from "./components/widgets/LiveTicker";
+import MarketClock from "./components/widgets/MarketClock";
+import PortfolioHeatMap from "./components/widgets/PortfolioHeatMap";
+import FearGreed from "./components/widgets/FearGreed";
+import CryptoDominance from "./components/widgets/CryptoDominance";
+import TVChart from "./components/widgets/TVChart";
+import EconomicCalendar from "./components/widgets/EconomicCalendar";
+import SignalScoreboard from "./components/widgets/SignalScoreboard";
 import { bridge, screen, backtest, bridgeConfigured } from "./lib/bridge";
 
 // ── Supabase credentials ───────────────────────────────────────────────────────
@@ -232,6 +240,7 @@ function AddPosition({ onClose, onSave, cash, initial }) {
     return {
       ticker: b.ticker || "", name: b.name || "", sector: b.sector || "",
       style: b.style || "POSITION", thesis_type: b.thesis_type || "MOMENTUM",
+      asset_class: b.asset_class || "EQUITY",
       shares: b.shares || "", entry_price: b.entry_ref || b.entry_price || "",
       target_price: b.target || b.target_price || "", invalidation: b.invalidation || "",
       thesis: b.thesis || "", confidence: b.confidence != null ? String(b.confidence) : "0.70",
@@ -290,6 +299,7 @@ function AddPosition({ onClose, onSave, cash, initial }) {
             {field("TICKER", "ticker", "text", "NVDA")}
             {field("NAME", "name", "text", "NVIDIA Corp")}
             {field("SECTOR", "sector", "text", "Technology")}
+            {sel("ASSET CLASS", "asset_class", ["EQUITY", "CRYPTO", "OPTIONS", "FOREX", "FUTURES"])}
             {sel("STYLE", "style", ["POSITION", "INTRADAY"])}
             {sel("TYPE", "thesis_type", ["MOMENTUM", "CATALYST", "QUALITY", "VALUE"])}
             {field("CONFIDENCE", "confidence", "number", "0.70")}
@@ -366,6 +376,8 @@ export default function App() {
   const [screens, setScreens] = useState([]);
   const [backtests, setBacktests] = useState({});
   const [shadowReport, setShadowReport] = useState(null);
+  const [signalLog, setSignalLog] = useState([]);
+  const [scoreboardTick, setScoreboardTick] = useState(0);
 
   const sbq = useCallback(async (table, opts = {}) => {
     if (!creds) return [];
@@ -416,13 +428,14 @@ export default function App() {
     if (!creds) return;
     setLoading(true); setErr(null);
     try {
-      const [p, pos, dec, fc, snaps, cands] = await Promise.all([
+      const [p, pos, dec, fc, snaps, cands, sig] = await Promise.all([
         sbq("portfolio", { limit: 1 }),
         sbq("positions", { filter: "status=neq.CLOSED", order: "opened_at.desc" }),
         sbq("decisions", { order: "decided_at.desc", limit: 20 }),
         sbq("forecasts", { order: "filed_at.desc", limit: 20 }),
         sbq("nav_snapshots", { order: "snapped_at.desc", limit: 30 }),
         sbq("candidates", { filter: `run_date=eq.${new Date().toISOString().split("T")[0]}`, order: "score.desc" }),
+        sbq("signals_broadcast", { order: "sent_at.desc", limit: 50 }),
       ]);
       setPortfolio(p[0] || null);
       setPositions(pos || []);
@@ -430,6 +443,7 @@ export default function App() {
       setForecasts(fc || []);
       setSnapshots((snaps || []).reverse());
       setCandidates(cands || []);
+      setSignalLog(sig || []);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -469,6 +483,7 @@ export default function App() {
         sector: form.sector,
         style: form.style,
         thesis_type: form.thesis_type,
+        asset_class: form.asset_class || "EQUITY",
         shares: Number(form.shares),
         entry_price: Number(form.entry_price),
         current_price: Number(form.entry_price),
@@ -616,9 +631,55 @@ export default function App() {
     setShowAdd(true);
   };
 
+  const handlePublish = async (pos) => {
+    if (!bridgeConfigured()) { pushChat("Harper", "Bridge not configured."); return; }
+    pushChat("Harper", `Publishing signal for ${pos.ticker}…`);
+    try {
+      const res = await bridge.publish({
+        ticker: pos.ticker,
+        asset_class: "EQUITY",
+        direction: "BUY",
+        style: pos.style || "POSITION",
+        entry: Number(pos.entry_price),
+        target: Number(pos.target_price || pos.entry_price * 1.2),
+        stop: Number(pos.invalidation || pos.entry_price * 0.85),
+        confidence: Number(pos.confidence || 0.7),
+        thesis: pos.thesis || "",
+        position_id: pos.id,
+      });
+      pushChat("Harper", `Signal ${res.status}${res.gate_failed ? ` (${res.gate_failed})` : ""}`);
+      setScoreboardTick(t => t + 1);
+      load();
+    } catch (e) {
+      pushChat("Harper", `Publish failed: ${e.message}`);
+    }
+  };
+
+  const handlePublishFromSignal = (sig) => {
+    if (!bridgeConfigured()) { pushChat("Harper", "Bridge not configured."); return; }
+    pushChat("Harper", `Publishing signal for ${sig.ticker}…`);
+    bridge.publish({
+      ticker: sig.ticker,
+      asset_class: "EQUITY",
+      direction: sig.signal === "SELL" ? "SELL" : "BUY",
+      style: sig.style || "POSITION",
+      entry: Number(sig.entry_ref),
+      target: Number(sig.target),
+      stop: Number(sig.invalidation),
+      confidence: Number(sig.confidence || 0.7),
+      thesis: sig.thesis || "",
+    })
+      .then(res => {
+        pushChat("Harper", `Signal ${res.status}${res.gate_failed ? ` (${res.gate_failed})` : ""}`);
+        setScoreboardTick(t => t + 1);
+        load();
+      })
+      .catch(e => pushChat("Harper", `Publish failed: ${e.message}`));
+  };
+
   if (!creds) return <CredentialGate onSave={(url, key) => setCreds({ url, key })} />;
 
-  const TABS = ["overview","positions","research","harper"];
+  const TABS = ["overview","positions","research","signals","harper"];
 
   return (
     <div style={{ background: C.bg, minHeight: "100vh", color: C.text, fontFamily: "'Inter','Helvetica Neue',sans-serif" }}>
@@ -675,6 +736,8 @@ export default function App() {
         </div>
       )}
 
+      <LiveTicker positions={positions} />
+
       <div style={{ padding: "20px 24px", maxWidth: 1280, margin: "0 auto" }}>
 
         {/* ── OVERVIEW ─────────────────────────────────────────────────────── */}
@@ -693,6 +756,8 @@ export default function App() {
               ))}
             </div>
 
+            <MarketClock />
+
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}>
               <Card>
                 <Hdr title="NAV History" right={`${snapshots.length} snapshots`} />
@@ -702,40 +767,14 @@ export default function App() {
                   <span style={{ fontSize: 10, color: navChangePct >= 0 ? C.green : C.red, fontFamily: C.mono }}>Now {fmt.usd(nav)}</span>
                 </div>
               </Card>
-              <Card>
-                <Hdr title="Allocation" />
-                {positions.length === 0 ? (
-                  <div style={{ fontSize: 11, color: C.textDim, fontFamily: C.mono, textAlign: "center", paddingTop: 20 }}>No open positions — all cash</div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {positions.map(p => {
-                      const val = Number(p.shares) * Number(p.current_price || p.entry_price);
-                      const w = nav > 0 ? (val / nav) * 100 : 0;
-                      const pnlPct = ((Number(p.current_price || p.entry_price) - Number(p.entry_price)) / Number(p.entry_price)) * 100;
-                      return (
-                        <div key={p.id}>
-                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                            <span style={{ fontSize: 11, fontFamily: C.mono, color: C.text }}>{p.ticker}</span>
-                            <span style={{ fontSize: 11, fontFamily: C.mono, color: clr(pnlPct) }}>{fmt.pct(pnlPct)}</span>
-                          </div>
-                          <div style={{ height: 3, background: C.border, borderRadius: 2, overflow: "hidden" }}>
-                            <div style={{ width: `${Math.min(w, 100)}%`, height: "100%", background: pnlPct >= 0 ? C.green : C.red, borderRadius: 2 }} />
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <div>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                        <span style={{ fontSize: 11, fontFamily: C.mono, color: C.textDim }}>CASH</span>
-                        <span style={{ fontSize: 11, fontFamily: C.mono, color: C.textDim }}>{nav > 0 ? ((Number(portfolio?.cash) / nav) * 100).toFixed(1) : 100}%</span>
-                      </div>
-                      <div style={{ height: 3, background: C.border, borderRadius: 2, overflow: "hidden" }}>
-                        <div style={{ width: `${nav > 0 ? (Number(portfolio?.cash) / nav) * 100 : 100}%`, height: "100%", background: C.textDim, borderRadius: 2 }} />
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </Card>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <Card>
+                  <Hdr title="Portfolio Heat Map" />
+                  <PortfolioHeatMap positions={positions} nav={nav} cash={Number(portfolio?.cash || 0)} />
+                </Card>
+                <FearGreed />
+                <CryptoDominance />
+              </div>
             </div>
 
             <Card>
@@ -863,12 +902,22 @@ export default function App() {
                             </tr>
                             {selPos === p.id && (
                               <tr key={`${p.id}-d`} style={{ background: C.surfaceHigh }}>
-                                <td colSpan={9} style={{ padding: "10px 14px", fontSize: 11, fontFamily: C.mono, color: C.textSub, lineHeight: 1.8 }}>
-                                  <span style={{ color: C.gold }}>Target: </span>{fmt.usd(Number(p.target_price || 0))} &nbsp;|&nbsp;
-                                  <span style={{ color: C.gold }}>Invalidation: </span>{fmt.usd(Number(p.invalidation || 0))} &nbsp;|&nbsp;
-                                  <span style={{ color: C.gold }}>Confidence: </span>{p.confidence ? `${(Number(p.confidence) * 100).toFixed(0)}%` : "—"}&nbsp;|&nbsp;
-                                  <span style={{ color: C.gold }}>Opened: </span>{new Date(p.opened_at).toLocaleDateString()}
-                                  {p.thesis && <><br /><span style={{ color: C.gold }}>Thesis: </span>{p.thesis}</>}
+                                <td colSpan={9} style={{ padding: "10px 14px" }}>
+                                  <div style={{ fontSize: 11, fontFamily: C.mono, color: C.textSub, lineHeight: 1.8, marginBottom: 10 }}>
+                                    <span style={{ color: C.gold }}>Target: </span>{fmt.usd(Number(p.target_price || 0))} &nbsp;|&nbsp;
+                                    <span style={{ color: C.gold }}>Invalidation: </span>{fmt.usd(Number(p.invalidation || 0))} &nbsp;|&nbsp;
+                                    <span style={{ color: C.gold }}>Confidence: </span>{p.confidence ? `${(Number(p.confidence) * 100).toFixed(0)}%` : "—"}&nbsp;|&nbsp;
+                                    <span style={{ color: C.gold }}>Opened: </span>{new Date(p.opened_at).toLocaleDateString()}
+                                    {p.thesis && <><br /><span style={{ color: C.gold }}>Thesis: </span>{p.thesis}</>}
+                                  </div>
+                                  <TVChart
+                                    ticker={p.ticker}
+                                    exchange={p.sector}
+                                    entry={Number(p.entry_price)}
+                                    target={Number(p.target_price || 0)}
+                                    stop={Number(p.invalidation || 0)}
+                                    interval={p.style}
+                                  />
                                 </td>
                               </tr>
                             )}
@@ -957,6 +1006,61 @@ export default function App() {
             {shadowReport && (
               <ShadowReportCard report={shadowReport} />
             )}
+
+            <EconomicCalendar />
+          </div>
+        )}
+
+        {/* ── SIGNALS ──────────────────────────────────────────────────────── */}
+        {tab === "signals" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <SignalScoreboard refreshToken={scoreboardTick} />
+            <Card>
+              <Hdr title="Active Signals" right={`${signalLog.filter(s => ["SENT","PINNED"].includes(s.status)).length} live`} />
+              {signalLog.filter(s => ["SENT","PINNED"].includes(s.status)).length === 0 ? (
+                <div style={{ fontSize: 11, color: C.textDim, fontFamily: C.mono, textAlign: "center", padding: "20px 0" }}>
+                  No active signals. Publish a gate-cleared thesis to broadcast.
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  {signalLog.filter(s => ["SENT","PINNED"].includes(s.status)).map(s => (
+                    <div key={s.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 10px", background: C.bg, borderRadius: 5, border: `1px solid ${C.border}` }}>
+                      <Badge label={s.asset_class} color={C.textSub} />
+                      <span style={{ fontSize: 12, fontFamily: C.mono, fontWeight: 700, color: C.text }}>{s.ticker}</span>
+                      <span style={{ fontSize: 11, fontFamily: C.mono, color: s.direction === "BUY" ? C.green : C.red }}>{s.direction}</span>
+                      <span style={{ fontSize: 11, fontFamily: C.mono, color: C.textSub }}>
+                        E {fmt.usd(s.entry)} · T {fmt.usd(s.target)} · S {fmt.usd(s.stop)}
+                        {s.reward_risk != null && <> · R/R {s.reward_risk}x</>}
+                      </span>
+                      <span style={{ marginLeft: "auto", fontSize: 10, fontFamily: C.mono, color: C.textDim }}>
+                        {new Date(s.sent_at).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+            <Card>
+              <Hdr title="Signal History" right={`${signalLog.length} total`} />
+              {signalLog.length === 0 ? (
+                <div style={{ fontSize: 11, color: C.textDim, fontFamily: C.mono, textAlign: "center", padding: "20px 0" }}>No signals broadcast yet.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  {signalLog.slice(0, 20).map(s => (
+                    <div key={s.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 10px", background: C.bg, borderRadius: 5, border: `1px solid ${C.border}` }}>
+                      <Badge label={s.status} color={s.status === "SENT" || s.status === "PINNED" ? C.green : s.status === "SUPPRESSED" ? C.red : C.blue} />
+                      <span style={{ fontSize: 11, fontFamily: C.mono, color: C.text }}>{s.ticker}</span>
+                      <span style={{ fontSize: 11, fontFamily: C.mono, color: s.direction === "BUY" ? C.green : C.red }}>{s.direction}</span>
+                      <span style={{ fontSize: 10, fontFamily: C.mono, color: C.textDim }}>{s.asset_class}</span>
+                      {s.gate_failed && <span style={{ fontSize: 10, fontFamily: C.mono, color: C.red }}>{s.gate_failed}</span>}
+                      <span style={{ marginLeft: "auto", fontSize: 10, fontFamily: C.mono, color: C.textDim }}>
+                        {new Date(s.sent_at).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
           </div>
         )}
 
@@ -1008,7 +1112,7 @@ export default function App() {
 
               {/* rendered signal cards */}
               {Object.values(signals).map(sig => (
-                <SignalCard key={sig.ticker} signal={sig} onFileThesis={() => handleFileFromSignal(sig)} />
+                <SignalCard key={sig.ticker} signal={sig} onFileThesis={() => handleFileFromSignal(sig)} onPublish={() => handlePublishFromSignal(sig)} />
               ))}
 
               {/* input */}

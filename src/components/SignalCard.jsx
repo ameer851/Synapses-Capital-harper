@@ -21,7 +21,7 @@ function Badge({ label, color = C.gold }) {
   );
 }
 
-export default function SignalCard({ signal, onFileThesis }) {
+export default function SignalCard({ signal, onFileThesis, onPublish }) {
   const [tab, setTab] = useState("fundamentals");
   if (!signal) return null;
   const reports = signal.analyst_reports || {};
@@ -91,6 +91,13 @@ export default function SignalCard({ signal, onFileThesis }) {
             background: C.gold, color: C.bg, fontFamily: C.mono, fontSize: 10,
             fontWeight: 700, letterSpacing: "0.08em", cursor: "pointer",
           }}>FILE THESIS → BUY</button>
+        )}
+        {signal.gate_status === "CLEAR" && onPublish && (
+          <button onClick={onPublish} style={{
+            padding: "8px 14px", borderRadius: 5, border: `1px solid ${C.green}`,
+            background: "none", color: C.green, fontFamily: C.mono, fontSize: 10,
+            fontWeight: 700, letterSpacing: "0.08em", cursor: "pointer",
+          }}>PUBLISH SIGNAL</button>
         )}
         <span style={{ alignSelf: "center", fontSize: 9, color: C.textDim, fontFamily: C.mono }}>
           {signal.sources?.length || 0} sources

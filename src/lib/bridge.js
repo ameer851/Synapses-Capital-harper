@@ -37,6 +37,8 @@ export const bridge = {
   resolveForecast: (payload) => req("POST", "/bridge/forecast/resolve", payload),
   brief: () => req("GET", "/bridge/brief"),
   health: () => req("GET", "/bridge/health"),
+  publish: (payload) => req("POST", "/bridge/publish", payload),
+  performance: () => req("GET", "/bridge/performance"),
 };
 
 // ── SSE endpoints ────────────────────────────────────────────────────────────
