@@ -39,6 +39,7 @@ export const bridge = {
   health: () => req("GET", "/bridge/health"),
   publish: (payload) => req("POST", "/bridge/publish", payload),
   performance: () => req("GET", "/bridge/performance"),
+  chat: (payload) => req("POST", "/bridge/chat", payload),
 };
 
 // ── SSE endpoints ────────────────────────────────────────────────────────────

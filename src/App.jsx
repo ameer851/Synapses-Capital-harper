@@ -602,16 +602,15 @@ export default function App() {
     pushChat("You", text);
     setChatBusy(true);
     try {
-      const r = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system: HARPER_SYS,
-          messages: chat.concat({ role: "user", content: text }).map(m => ({ role: m.who === "You" ? "user" : "assistant", content: m.text })),
-        }),
+      if (!bridgeConfigured()) {
+        pushChat("Harper", "Bridge not configured — set VITE_BRIDGE_URL / VITE_BRIDGE_KEY.");
+        return;
+      }
+      const data = await bridge.chat({
+        system: HARPER_SYS,
+        messages: chat.concat({ role: "user", content: text }).map(m => ({ role: m.who === "You" ? "user" : "assistant", content: m.text })),
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || r.statusText);
+      if (data.error) throw new Error(data.error);
       const actions = parseActions(data.content);
       const prose = stripActions(data.content);
       if (prose) pushChat("Harper", prose);
