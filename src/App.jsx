@@ -606,9 +606,13 @@ export default function App() {
         pushChat("Harper", "Bridge not configured — set VITE_BRIDGE_URL / VITE_BRIDGE_KEY.");
         return;
       }
+      const msgs = chat
+        .concat({ role: "user", content: text })
+        .map(m => ({ role: m.who === "You" ? "user" : "assistant", content: m.text }))
+        .filter(m => m.content && m.content.trim());
       const data = await bridge.chat({
         system: HARPER_SYS,
-        messages: chat.concat({ role: "user", content: text }).map(m => ({ role: m.who === "You" ? "user" : "assistant", content: m.text })),
+        messages: msgs,
       });
       if (data.error) throw new Error(data.error);
       const actions = parseActions(data.content);
@@ -687,6 +691,8 @@ export default function App() {
         ::-webkit-scrollbar { width: 4px; height: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 2px; }
+        body { margin: 0; padding: 0; background: ${C.bg}; }
+        #root { min-height: 100vh; }
         input::placeholder, textarea::placeholder { color: ${C.textDim}; }
         @keyframes blink { 0%,100%{opacity:.2;transform:scale(.8)} 50%{opacity:1;transform:scale(1.1)} }
         button { transition: opacity .15s, background .15s; }
