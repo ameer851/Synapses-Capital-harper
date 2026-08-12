@@ -4,6 +4,8 @@
 export const C = {
   bg: "#0A0A0A",
   surface: "#131313",
+  surface2: "#171A1F",
+  surface3: "#20242C",
   surfaceHigh: "#1C1C1C",
   border: "#262626",
   borderHi: "#3A3A3A",

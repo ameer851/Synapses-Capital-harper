@@ -15,6 +15,7 @@ import EconomicCalendar from "./components/widgets/EconomicCalendar";
 import SignalScoreboard from "./components/widgets/SignalScoreboard";
 import NewsFeed from "./components/widgets/NewsFeed";
 import { bridge, screen, backtest, bridgeConfigured } from "./lib/bridge";
+import { HARPER_MARKETS, HARPER_PROMPTS, HARPER_RULES } from "./lib/harperPresentation";
 
 // ── Supabase credentials ───────────────────────────────────────────────────────
 // Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON in Vercel env vars or .env.local.
@@ -46,6 +47,8 @@ RULES:
 const C = {
   bg: "#0A0A0A",
   surface: "#131313",
+  surface2: "#171A1F",
+  surface3: "#20242C",
   surfaceHigh: "#1C1C1C",
   border: "#262626",
   borderHi: "#3A3A3A",
@@ -104,9 +107,9 @@ function Badge({ label, color = C.gold }) {
   );
 }
 
-function Card({ children, style = {}, glow }) {
+function Card({ children, style = {}, glow, className }) {
   return (
-    <div style={{
+    <div className={className} style={{
       background: C.surface,
       border: `1px solid ${glow ? C.goldDim : C.border}`,
       borderRadius: 8, padding: 18,
@@ -1085,111 +1088,130 @@ export default function App() {
           </div>
         )}
 
-        {/* ── HARPER ───────────────────────────────────────────────────────── */}
+        {/* Harper */}
         {tab === "harper" && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 16, alignItems: "start" }}>
-            <Card glow style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 14, borderBottom: `1px solid ${C.border}` }}>
-                <div style={{
-                  width: 34, height: 34, borderRadius: "50%",
-                  background: `linear-gradient(135deg, ${C.goldDim}, ${C.gold})`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 15, fontWeight: 800, color: C.bg, fontFamily: C.mono,
-                }}>H</div>
+          <div className="harper-shell">
+            <Card glow className="harper-console" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <div className="harper-header">
+                <div className="harper-avatar">H</div>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Harper</div>
-                  <div style={{ fontSize: 10, color: C.textDim, fontFamily: C.mono }}>Virtual CIO · Synapses Capital</div>
+                  <div className="harper-title">Harper</div>
+                  <div className="harper-subtitle">Virtual CIO - Synapses Capital</div>
                 </div>
-                <div style={{ marginLeft: "auto" }}>
-                  <Badge label={bridgeConfigured() ? "BRIDGE" : "CHAT ONLY"} color={bridgeConfigured() ? C.green : C.textDim} />
+                <div className="harper-header-metrics">
+                  <div className="harper-metric">
+                    <div className="harper-metric-label">Mode</div>
+                    <div className="harper-metric-value">{bridgeConfigured() ? "Bridge" : "Chat only"}</div>
+                  </div>
+                  <div className="harper-metric">
+                    <div className="harper-metric-label">Exposure</div>
+                    <div className="harper-metric-value">{exposure.toFixed(1)}%</div>
+                  </div>
+                  <div className="harper-metric">
+                    <div className="harper-metric-label">Forecasts</div>
+                    <div className="harper-metric-value">{resolved.length}{brierScore ? ` / ${brierScore}` : ""}</div>
+                  </div>
                 </div>
               </div>
 
-              {/* chat thread */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: 320, maxHeight: 420, overflowY: "auto" }}>
+              <div className="harper-thread">
                 {chat.length === 0 && (
-                  <div style={{ fontSize: 12, color: C.textDim, fontFamily: C.mono, textAlign: "center", padding: "40px 0", lineHeight: 2 }}>
-                    Talk to Harper — build a thesis, screen a sector,<br />
-                    backtest a position, run the shadow account.<br />
-                    <span style={{ fontSize: 10 }}>e.g. "Build a thesis for NVDA" · "Screen semiconductors"</span>
+                  <div className="harper-empty">
+                    <div>
+                      <div className="harper-empty-title">Investment command desk</div>
+                      <div className="harper-empty-copy">
+                        Ask Harper to build a thesis, screen a sector, backtest a position, or run the shadow account.
+                      </div>
+                    </div>
+                    <div className="harper-prompts">
+                      {HARPER_PROMPTS.map((prompt) => (
+                        <button
+                          key={prompt.label}
+                          type="button"
+                          className="harper-prompt"
+                          onClick={() => setChatInput(prompt.text)}
+                        >
+                          {prompt.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {chat.map((m, i) => (
-                  <div key={i} style={{
-                    alignSelf: m.who === "You" ? "flex-end" : "flex-start",
-                    maxWidth: "85%", padding: "8px 12px", borderRadius: 8,
-                    background: m.who === "You" ? C.surface3 : C.bg,
-                    border: `1px solid ${m.who === "You" ? C.borderHi : C.border}`,
-                    fontSize: 12, fontFamily: C.mono, lineHeight: 1.7, whiteSpace: "pre-wrap",
-                    color: m.who === "You" ? C.text : C.textSub,
-                  }}>
+                  <div
+                    key={i}
+                    className={`harper-message ${m.who === "You" ? "harper-message-user" : "harper-message-assistant"}`}
+                  >
                     {m.text}
                   </div>
                 ))}
                 {chatBusy && (
-                  <div style={{ fontSize: 11, color: C.textDim, fontFamily: C.mono }}>…thinking</div>
+                  <div className="harper-thinking">Thinking...</div>
                 )}
               </div>
 
-              {/* rendered signal cards */}
               {Object.values(signals).map(sig => (
                 <SignalCard key={sig.ticker} signal={sig} onFileThesis={() => handleFileFromSignal(sig)} onPublish={() => handlePublishFromSignal(sig)} />
               ))}
 
-              {/* input */}
-              <div style={{ display: "flex", gap: 8 }}>
+              <div className="harper-input-row">
                 <input
                   value={chatInput}
                   onChange={e => setChatInput(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && sendChat()}
-                  placeholder="Message Harper…"
-                  style={{
-                    flex: 1, padding: "10px 12px", borderRadius: 6,
-                    background: C.bg, border: `1px solid ${C.borderHi}`,
-                    color: C.text, fontFamily: C.mono, fontSize: 12, outline: "none",
-                  }}
+                  placeholder="Message Harper..."
+                  className="harper-input"
                 />
-                <button onClick={sendChat} disabled={chatBusy} style={{
-                  padding: "10px 16px", borderRadius: 6, border: "none",
-                  background: C.gold, color: C.bg, fontFamily: C.mono, fontSize: 11,
-                  fontWeight: 700, letterSpacing: "0.08em", cursor: chatBusy ? "not-allowed" : "pointer",
-                }}>SEND</button>
+                <button onClick={sendChat} disabled={chatBusy} className="harper-send">SEND</button>
               </div>
             </Card>
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <Card>
-                <Hdr title="Rules" />
-                <div style={{ fontSize: 10, color: C.textSub, fontFamily: C.mono, lineHeight: 2.1 }}>
-                  {["NO_TRADE is valid","≥2 sources, ≥1 primary","R/R ≥ 1.5","Size from invalidation","No fabricated fills","Intraday closes same day","30 forecasts before tuning"].map((r, i) => (
-                    <div key={i} style={{ display: "flex", gap: 8 }}>
-                      <span style={{ color: C.goldDim }}>{String(i + 1).padStart(2, "0")}</span>{r}
+
+            <div className="harper-rail">
+              <div className="harper-rail-card">
+                <div className="harper-rail-title">
+                  <span>Mandate</span>
+                  <span>{bridgeConfigured() ? "Live" : "Local"}</span>
+                </div>
+                {HARPER_RULES.map((rule, i) => (
+                  <div key={rule} className="harper-rule">
+                    <span><span className="harper-index">{String(i + 1).padStart(2, "0")}</span>{rule}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="harper-rail-card">
+                <div className="harper-rail-title">
+                  <span>Markets</span>
+                  <span>{HARPER_MARKETS.length}</span>
+                </div>
+                {HARPER_MARKETS.map(([name, currency, context]) => (
+                  <div key={name} className="harper-market">
+                    <span className="harper-market-code">{name}</span>
+                    <span className="harper-market-meta">{currency} - {context}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="harper-rail-card">
+                <div className="harper-rail-title">
+                  <span>Regime</span>
+                  <span>{positions.filter(p => p.status !== "CLOSED").length} active</span>
+                </div>
+                <div className="harper-regime-value">{portfolio?.regime || "NORMAL"}</div>
+                <div className="harper-regime-grid">
+                  {[
+                    ["Defensive", "25-50%"],
+                    ["Normal", "50-75%"],
+                    ["Strong", "70-90%"],
+                    ["Current", `${exposure.toFixed(1)}%`],
+                  ].map(([label, value]) => (
+                    <div key={label} className="harper-regime-row">
+                      <span>{label}</span>
+                      <span>{value}</span>
                     </div>
                   ))}
                 </div>
-              </Card>
-              <Card>
-                <Hdr title="Markets" />
-                <div style={{ fontSize: 10, color: C.textSub, fontFamily: C.mono, lineHeight: 2 }}>
-                  {[["NYSE/NAS","USD · Primary"],["LSE","GBP · Hedge"],["NSE Nigeria","NGN · Home"],["Tadawul","SAR · Gulf"],["HKEX","HKD · Asia"]].map(([n, d]) => (
-                    <div key={n} style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span style={{ color: C.text }}>{n}</span>
-                      <span style={{ color: C.textDim }}>{d}</span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-              <Card>
-                <Hdr title="Regime" />
-                <div style={{ fontSize: 11, fontFamily: C.mono, color: C.textSub, lineHeight: 2 }}>
-                  <span style={{ color: C.green }}>{portfolio?.regime || "NORMAL"}</span><br />
-                  <span style={{ color: C.textDim, fontSize: 10 }}>
-                    DEFENSIVE 25–50%<br />
-                    NORMAL 50–75%<br />
-                    STRONG 70–90%<br />
-                    Exposure: {exposure.toFixed(1)}%
-                  </span>
-                </div>
-              </Card>
+              </div>
             </div>
           </div>
         )}
