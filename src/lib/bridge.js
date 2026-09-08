@@ -1,12 +1,10 @@
-// ── Harper Intelligence Bridge — Dashboard API client ────────────────────────
-// Thin fetch wrapper for all Bridge endpoints. All calls include X-Bridge-Key.
-// SSE endpoints return an EventSource or ReadableStream per the PRD.
-
+// Harper Intelligence Bridge — research API client.
+// The frontend remains engine-agnostic: VectorBT/Nautilus/LEAN can sit behind these contracts.
 const BRIDGE_URL = import.meta.env.VITE_BRIDGE_URL || "";
 const BRIDGE_KEY = import.meta.env.VITE_BRIDGE_KEY || "";
 
 export function bridgeConfigured() {
-  return !!(BRIDGE_URL && BRIDGE_KEY);
+  return Boolean(BRIDGE_URL && BRIDGE_KEY);
 }
 
 function headers(extra = {}) {
@@ -32,36 +30,38 @@ async function req(method, path, body) {
 
 function describeError(detail, fallback) {
   if (typeof detail === "string") return detail || fallback;
-  if (detail == null) return fallback;
-  if (typeof detail.detail === "string") return detail.detail;
-  if (typeof detail.error === "string") return detail.error;
-  if (typeof detail.message === "string") return detail.message;
-  try { return JSON.stringify(detail); } catch { return fallback; }
+  if (!detail) return fallback;
+  return detail.detail || detail.error || detail.message || JSON.stringify(detail);
 }
 
-// ── REST endpoints ───────────────────────────────────────────────────────────
 export const bridge = {
+  health: () => req("GET", "/bridge/health"),
+  brief: () => req("GET", "/bridge/brief"),
   signal: (payload) => req("POST", "/bridge/signal", payload),
   shadow: (payload) => req("POST", "/bridge/shadow", payload),
   resolveForecast: (payload) => req("POST", "/bridge/forecast/resolve", payload),
-  brief: () => req("GET", "/bridge/brief"),
-  health: () => req("GET", "/bridge/health"),
   publish: (payload) => req("POST", "/bridge/publish", payload),
   performance: () => req("GET", "/bridge/performance"),
   chat: (payload) => req("POST", "/bridge/chat", payload),
+
+  // Harper v2 research contracts
+  strategies: () => req("GET", "/bridge/research/strategies"),
+  createStrategy: (payload) => req("POST", "/bridge/research/strategies", payload),
+  getExperiment: (id) => req("GET", `/bridge/research/experiments/${encodeURIComponent(id)}`),
+  listExperiments: () => req("GET", "/bridge/research/experiments"),
+  robustness: (payload) => req("POST", "/bridge/research/robustness", payload),
+  promote: (payload) => req("POST", "/bridge/research/promote", payload),
 };
 
-// ── SSE endpoints ────────────────────────────────────────────────────────────
-// Returns a ReadableStream via fetch streaming; caller consumes events.
-export function screen(payload, { onProgress, onComplete, onError }) {
-  return stream("POST", "/bridge/screen", payload, { onProgress, onComplete, onError });
+export function screen(payload, handlers = {}) {
+  return stream("POST", "/bridge/screen", payload, handlers);
 }
 
-export function backtest(payload, { onProgress, onComplete, onError }) {
-  return stream("POST", "/bridge/backtest", payload, { onProgress, onComplete, onError });
+export function backtest(payload, handlers = {}) {
+  return stream("POST", "/bridge/backtest", payload, handlers);
 }
 
-async function stream(method, path, body, { onProgress, onComplete, onError }) {
+export async function stream(method, path, body, { onProgress, onComplete, onError } = {}) {
   try {
     const r = await fetch(`${BRIDGE_URL}${path}`, {
       method,
@@ -71,33 +71,40 @@ async function stream(method, path, body, { onProgress, onComplete, onError }) {
     if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`);
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
-    let buf = "";
+    let buffer = "";
+
+    const consume = (raw) => {
+      const ev = parseSse(raw);
+      if (!ev.data) return;
+      let data = ev.data;
+      try { data = JSON.parse(ev.data); } catch { /* plain text event */ }
+      if (ev.event === "complete") onComplete?.(data);
+      else if (ev.event === "progress") onProgress?.(data);
+      else if (ev.event === "error") onError?.(typeof data === "string" ? data : JSON.stringify(data));
+    };
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf("\n\n")) !== -1) {
-        const raw = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const ev = parseSse(raw);
-        if (ev.event === "complete" && ev.data) onComplete?.(JSON.parse(ev.data));
-        else if (ev.event === "progress" && ev.data) onProgress?.(JSON.parse(ev.data));
-        else if (ev.event === "error" && ev.data) onError?.(typeof ev.data === "string" ? ev.data : JSON.stringify(ev.data));
+      buffer += decoder.decode(value, { stream: true });
+      let index;
+      while ((index = buffer.indexOf("\n\n")) !== -1) {
+        consume(buffer.slice(0, index));
+        buffer = buffer.slice(index + 2);
       }
     }
+    if (buffer.trim()) consume(buffer);
   } catch (e) {
     onError?.(e.message);
   }
 }
 
 function parseSse(raw) {
-  const lines = raw.split("\n");
   let event = "message";
-  let data = "";
-  for (const line of lines) {
+  const data = [];
+  for (const line of raw.split(/\r?\n/)) {
     if (line.startsWith("event:")) event = line.slice(6).trim();
-    else if (line.startsWith("data:")) data = line.slice(5).trim();
+    if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
   }
-  return { event, data };
+  return { event, data: data.join("\n") };
 }
